@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ChatPDF — AI Document Intelligence</title>
+  <meta name="description" content="Chat with your PDFs using AI. Upload research papers, notes, books and ask questions powered by RAG and Gemini." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+<!-- ═══════════════════════ SIDEBAR ═══════════════════════ -->
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-header">
+    <div class="logo">
+      <div class="logo-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <polyline points="14,2 14,8 20,8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <line x1="16" y1="13" x2="8" y2="13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="16" y1="17" x2="8" y2="17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <polyline points="10,9 9,9 8,9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <span class="logo-text">ChatPDF</span>
+    </div>
+  </div>
+
+  <!-- Upload Zone -->
+  <div class="upload-section">
+    <div class="upload-zone" id="uploadZone">
+      <div class="upload-icon-wrap">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <polyline points="17,8 12,3 7,8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <line x1="12" y1="3" x2="12" y2="15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <p class="upload-text">Drop PDF here</p>
+      <p class="upload-subtext">or click to browse</p>
+      <input type="file" id="fileInput" accept=".pdf" hidden />
+    </div>
+    <div class="upload-progress" id="uploadProgress" style="display:none;">
+      <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+      <span class="progress-label" id="progressLabel">Processing…</span>
+    </div>
+  </div>
+
+  <!-- Document List -->
+  <div class="docs-section">
+    <div class="section-label">
+      <span>Documents</span>
+      <span class="doc-count" id="docCount">0</span>
+    </div>
+    <div class="doc-list" id="docList">
+      <div class="empty-docs">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" opacity="0.3">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" stroke-width="1.5"/>
+          <polyline points="14,2 14,8 20,8" stroke="currentColor" stroke-width="1.5"/>
+        </svg>
+        <p>No documents yet</p>
+      </div>
+    </div>
+  </div>
+
+
+</aside>
+
+<!-- ═══════════════════════ MAIN ═══════════════════════ -->
+<main class="main" id="main">
+
+  <!-- Welcome Screen -->
+  <div class="welcome-screen" id="welcomeScreen">
+    <div class="welcome-content">
+      <div class="welcome-orb"></div>
+      <h1 class="welcome-title">Chat with your PDFs</h1>
+      <p class="welcome-subtitle">Upload a document and start asking questions.<br/>Powered by RAG + Groq AI (Llama 3.3).</p>
+
+      <div class="feature-grid">
+        <div class="feature-card">
+          <div class="feature-icon">🔍</div>
+          <div class="feature-text">
+            <strong>Smart Search</strong>
+            <span>Semantic retrieval finds the exact context</span>
+          </div>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">📋</div>
+          <div class="feature-text">
+            <strong>Summarize</strong>
+            <span>Get instant document summaries</span>
+          </div>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🎓</div>
+          <div class="feature-text">
+            <strong>Generate MCQs</strong>
+            <span>Create quiz questions from any document</span>
+          </div>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">📖</div>
+          <div class="feature-text">
+            <strong>Chapter Explainer</strong>
+            <span>Deep-dive into any section or chapter</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="supported-types">
+        <span class="type-badge">📚 Research Papers</span>
+        <span class="type-badge">📓 College Notes</span>
+        <span class="type-badge">📊 Company SOPs</span>
+        <span class="type-badge">📕 Books</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chat Screen -->
+  <div class="chat-screen" id="chatScreen" style="display:none;">
+
+    <!-- Chat Header -->
+    <div class="chat-header">
+      <div class="chat-doc-info">
+        <div class="chat-doc-icon">📄</div>
+        <div class="chat-doc-details">
+          <h2 class="chat-doc-name" id="chatDocName">Document</h2>
+          <span class="chat-doc-meta" id="chatDocMeta"></span>
+        </div>
+      </div>
+      <div class="chat-actions">
+        <button class="btn-ghost" id="btnNewChat" title="New Chat">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          New Chat
+        </button>
+      </div>
+    </div>
+
+    <!-- Messages -->
+    <div class="messages-container" id="messagesContainer">
+      <div class="messages" id="messages"></div>
+    </div>
+
+    <!-- Quick Prompts -->
+    <div class="quick-prompts" id="quickPrompts">
+      <button class="prompt-chip" data-prompt="Summarize this document.">📋 Summarize</button>
+      <button class="prompt-chip" data-prompt="Generate 5 MCQs from this document.">🎓 Generate MCQs</button>
+      <button class="prompt-chip" data-prompt="What are the key points in this document?">🔑 Key Points</button>
+      <button class="prompt-chip" data-prompt="Explain Chapter 1.">📖 Explain Chapter 1</button>
+    </div>
+
+    <!-- Input Area -->
+    <div class="input-area">
+      <div class="input-wrapper">
+        <textarea
+          id="chatInput"
+          class="chat-input"
+          placeholder="Ask anything about this document…"
+          rows="1"
+          maxlength="2000"
+        ></textarea>
+        <button class="send-btn" id="sendBtn" title="Send" disabled>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <line x1="22" y1="2" x2="11" y2="13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <polygon points="22,2 15,22 11,13 2,9" fill="currentColor"/>
+          </svg>
+        </button>
+      </div>
+      <p class="input-hint">Press <kbd>Enter</kbd> to send · <kbd>Shift+Enter</kbd> for new line</p>
+    </div>
+  </div>
+
+</main>
+
+<!-- ═══════════════════════ TOAST ═══════════════════════ -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

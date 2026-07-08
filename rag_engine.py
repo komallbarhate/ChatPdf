@@ -27,15 +27,10 @@ CHUNK_SIZE      = 500
 CHUNK_OVERLAP   = 80
 TOP_K           = 6
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-# ── Model Fallback Chain ──────────────────────────────────
-# System tries each model in order. If one is rate-limited (429),
-# it automatically falls back to the next one silently.
+# ── Model Configuration ─────────────────────────────────────
+# Only using the single best model as requested
 MODEL_CHAIN = [
-    "llama-3.3-70b-versatile",   # Best quality  — 100K tokens/day
-    "llama-3.1-70b-versatile",   # Same quality  — 100K tokens/day (separate quota)
-    "llama-3.1-8b-instant",      # Fast & light  — 500K tokens/day
-    "gemma2-9b-it",              # Google model  — 500K tokens/day
-    "mixtral-8x7b-32768",        # Mixtral       — 500K tokens/day
+    "llama-3.3-70b-versatile",   # Best quality
 ]
 UPLOAD_DIR      = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -197,7 +192,7 @@ class GroqLLMClient:
         self.current_model = MODEL_CHAIN[0]   # start with best model
         self._chain_idx   = 0                 # tracks which model we're on
         print(f"[LLM] Primary model: {self.current_model}")
-        print(f"[LLM] Fallback chain: {' → '.join(MODEL_CHAIN[1:])}")
+        print(f"[LLM] Fallback chain: {' -> '.join(MODEL_CHAIN[1:])}")
 
     def generate(self, system_prompt: str, user_message: str,
                  temperature: float = 0.3, max_tokens: int = 2048) -> str:
@@ -220,7 +215,7 @@ class GroqLLMClient:
                 )
                 # Success — remember this model for next calls
                 if model != self.current_model:
-                    print(f"[LLM] ✓ Now using: {model}")
+                    print(f"[LLM] [OK] Now using: {model}")
                     self.current_model = model
                     self._chain_idx    = idx
                 return response.choices[0].message.content
@@ -231,7 +226,7 @@ class GroqLLMClient:
                                  or "quota" in err_str.lower())
                 if is_rate_limit and idx + 1 < len(MODEL_CHAIN):
                     next_model = MODEL_CHAIN[idx + 1]
-                    print(f"[LLM] ⚠ Rate limit on '{model}' → switching to '{next_model}'")
+                    print(f"[LLM] [!] Rate limit on '{model}' -> switching to '{next_model}'")
                     continue   # try next model in chain
                 elif is_rate_limit:
                     # All models exhausted
@@ -245,21 +240,45 @@ class GroqLLMClient:
     def generate_json(self, system_prompt: str, user_message: str,
                       max_tokens: int = 3000) -> dict:
         """Generate and parse a JSON response."""
+        system_prompt += "\n\nCRITICAL: Return ONLY valid JSON. Do not include any conversational text or markdown. Start immediately with { or [."
         raw = self.generate(system_prompt, user_message,
                             temperature=0.1, max_tokens=max_tokens)
-        # Extract JSON block from response
-        match = re.search(r'```json\s*([\s\S]*?)\s*```', raw)
+        
+        if raw.startswith("LLM Error:"):
+            print(f"[LLM Error encountered in JSON mode]: {raw}")
+            return {"error": raw}
+            
+        # Extract markdown JSON block if present
+        match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', raw)
         if match:
             raw = match.group(1)
-        else:
-            # Try to find first { or [
-            m = re.search(r'(\{[\s\S]*\}|\[[\s\S]*\])', raw)
-            if m:
-                raw = m.group(1)
+        
+        # Find outermost { ... } or [ ... ]
+        start_obj = raw.find('{')
+        start_arr = raw.find('[')
+        
+        if start_obj != -1 or start_arr != -1:
+            start = start_obj if (start_arr == -1 or (start_obj != -1 and start_obj < start_arr)) else start_arr
+            end_char = '}' if start == start_obj else ']'
+            end = raw.rfind(end_char)
+            if end != -1 and end >= start:
+                raw = raw[start:end+1]
+        
+        # Clean up common JSON errors (e.g. trailing commas from open models)
+        raw = re.sub(r',\s*([\]}])', r'\1', raw)
+        
         try:
-            return json.loads(raw)
-        except Exception:
-            return {"error": "Failed to parse JSON", "raw": raw}
+            import json_repair
+            return json_repair.loads(raw)
+        except ImportError:
+            try:
+                return json.loads(raw)
+            except Exception as e:
+                print(f"[JSON Parse Error] {e}\nRaw extracted:\n{raw[:500]}...")
+                return {"error": "Failed to parse JSON. The AI model returned invalid formatting. Please try again."}
+        except Exception as e:
+            print(f"[JSON Repair Error] {e}\nRaw extracted:\n{raw[:500]}...")
+            return {"error": "Failed to parse JSON. The AI model returned invalid formatting. Please try again."}
 
 
 # ──────────────────────────────────────────

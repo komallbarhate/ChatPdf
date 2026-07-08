@@ -30,7 +30,7 @@
 | 🎓 **Study Mode** | Generate Flashcards, MCQs, Fill-in-the-Blanks, and Viva Q&A from any document |
 | 📒 **AI Notebook** | Auto-saves key concepts from every chat answer — searchable knowledge base |
 | 📚 **Citation Verifier** | Every answer includes PDF name, page number, and highlighted source text |
-| ⚡ **Auto Model Fallback** | Automatically switches between 5 AI models if one hits rate limits |
+| 🛠️ **Robust JSON Engine** | Uses `json-repair` to auto-fix and sanitize LLM outputs on the fly |
 
 ---
 
@@ -112,15 +112,6 @@ EmbeddingStore ──► sentence-transformers/all-MiniLM-L6-v2
 RAGChain ──► top-6 chunks retrieved → Groq LLM → answer + citations
 ```
 
-### Auto Model Fallback Chain
-If a model hits its rate limit, the system **automatically** falls back to the next:
-
-```
-llama-3.3-70b-versatile  →  llama-3.1-70b-versatile  →  llama-3.1-8b-instant  →  gemma2-9b-it  →  mixtral-8x7b-32768
-     100K TPD/day               100K TPD/day               500K TPD/day           500K TPD/day       500K TPD/day
-```
-**Total: ~1.3 million free tokens/day** across the chain.
-
 ---
 
 ## 📡 API Endpoints
@@ -186,14 +177,7 @@ CHUNK_SIZE      = 500    # characters per chunk
 CHUNK_OVERLAP   = 80     # overlap between chunks
 TOP_K           = 6      # chunks retrieved per query
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-
-MODEL_CHAIN = [
-    "llama-3.3-70b-versatile",   # Primary — best quality
-    "llama-3.1-70b-versatile",   # Fallback 1
-    "llama-3.1-8b-instant",      # Fallback 2 — fastest
-    "gemma2-9b-it",              # Fallback 3
-    "mixtral-8x7b-32768",        # Fallback 4
-]
+MODEL_CHAIN     = ["llama-3.3-70b-versatile"]
 ```
 
 ---

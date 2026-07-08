@@ -27,7 +27,16 @@ CHUNK_SIZE      = 500
 CHUNK_OVERLAP   = 80
 TOP_K           = 6
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-GROQ_MODEL      = "llama-3.3-70b-versatile"
+# ── Model Fallback Chain ──────────────────────────────────
+# System tries each model in order. If one is rate-limited (429),
+# it automatically falls back to the next one silently.
+MODEL_CHAIN = [
+    "llama-3.3-70b-versatile",   # Best quality  — 100K tokens/day
+    "llama-3.1-70b-versatile",   # Same quality  — 100K tokens/day (separate quota)
+    "llama-3.1-8b-instant",      # Fast & light  — 500K tokens/day
+    "gemma2-9b-it",              # Google model  — 500K tokens/day
+    "mixtral-8x7b-32768",        # Mixtral       — 500K tokens/day
+]
 UPLOAD_DIR      = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
@@ -185,22 +194,53 @@ class GroqLLMClient:
                 "Get a free key at: https://console.groq.com/keys"
             )
         self.client = Groq(api_key=api_key)
+        self.current_model = MODEL_CHAIN[0]   # start with best model
+        self._chain_idx   = 0                 # tracks which model we're on
+        print(f"[LLM] Primary model: {self.current_model}")
+        print(f"[LLM] Fallback chain: {' → '.join(MODEL_CHAIN[1:])}")
 
     def generate(self, system_prompt: str, user_message: str,
                  temperature: float = 0.3, max_tokens: int = 2048) -> str:
-        try:
-            response = self.client.chat.completions.create(
-                model=GROQ_MODEL,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user",   "content": user_message},
-                ],
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            return f"LLM Error: {str(e)}"
+        """
+        Try each model in MODEL_CHAIN. If one returns 429 (rate limit),
+        automatically fall back to the next model.
+        """
+        # Always start from the current successful model, not from index 0
+        for idx in range(self._chain_idx, len(MODEL_CHAIN)):
+            model = MODEL_CHAIN[idx]
+            try:
+                response = self.client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user",   "content": user_message},
+                    ],
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                # Success — remember this model for next calls
+                if model != self.current_model:
+                    print(f"[LLM] ✓ Now using: {model}")
+                    self.current_model = model
+                    self._chain_idx    = idx
+                return response.choices[0].message.content
+
+            except Exception as e:
+                err_str = str(e)
+                is_rate_limit = ("429" in err_str or "rate_limit" in err_str.lower()
+                                 or "quota" in err_str.lower())
+                if is_rate_limit and idx + 1 < len(MODEL_CHAIN):
+                    next_model = MODEL_CHAIN[idx + 1]
+                    print(f"[LLM] ⚠ Rate limit on '{model}' → switching to '{next_model}'")
+                    continue   # try next model in chain
+                elif is_rate_limit:
+                    # All models exhausted
+                    return ("LLM Error: All models are currently rate-limited. "
+                            "Please wait a few minutes and try again.")
+                else:
+                    return f"LLM Error: {err_str}"
+
+        return "LLM Error: No models available."
 
     def generate_json(self, system_prompt: str, user_message: str,
                       max_tokens: int = 3000) -> dict:
@@ -342,24 +382,28 @@ def generate_mind_map(llm: GroqLLMClient, chunks: List[Chunk]) -> Dict:
 # ──────────────────────────────────────────
 
 TIMELINE_SYSTEM = """You are an expert timeline extractor.
-Extract all events with dates/times from the text and return ONLY valid JSON:
+Extract EVERY event with a date or time reference from the text and return ONLY valid JSON:
 {
   "title": "Document Timeline",
   "events": [
     {
       "date": "YYYY or YYYY-MM or YYYY-MM-DD",
       "title": "Event Title",
-      "description": "Brief description",
+      "description": "Full description of the event with context",
       "category": "Historical|Scientific|Political|Personal|Technical|Other"
     }
   ]
 }
-Sort events chronologically. Include 5-20 events. If exact dates are uncertain, use approximate years.
+Rules:
+- Include EVERY date/event mentioned — do not skip any.
+- Sort events chronologically by date.
+- Use "Unknown" for dates that cannot be determined.
+- Write detailed descriptions (2-3 sentences each).
 Return ONLY the JSON object, no other text."""
 
 def extract_timeline(llm: GroqLLMClient, chunks: List[Chunk]) -> Dict:
-    text = "\n\n".join(c.text for c in chunks[:15])
-    return llm.generate_json(TIMELINE_SYSTEM, f"Extract timeline from:\n\n{text}", max_tokens=3000)
+    text = "\n\n".join(c.text for c in chunks[:20])  # use more chunks
+    return llm.generate_json(TIMELINE_SYSTEM, f"Extract ALL events and dates from:\n\n{text}", max_tokens=8000)
 
 
 # ──────────────────────────────────────────

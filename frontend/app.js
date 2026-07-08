@@ -7,9 +7,9 @@ let state = {
   chatHistories: {},
   crossHistory: [],
   isTyping: false,
-  studyData: null,
   currentStudyTab: 'flashcards',
 };
+window._appState = state; // expose for cross-module access
 
 const $ = id => document.getElementById(id);
 const DOM = {
@@ -227,11 +227,17 @@ function appendMsg(msg, container) {
   const div = document.createElement('div');
   div.className = `message ${msg.role === 'user' ? 'user-msg' : 'ai-msg'}`;
   const citHtml = (msg.citations && msg.citations.length)
-    ? `<div class="citations-bar"><div class="citations-label">Citations</div>${msg.citations.slice(0,4).map(c=>`
-        <div class="citation-item">
-          <div class="citation-header"><span class="citation-file">📄 ${esc(c.filename||'Document')}</span><span class="citation-page">Page ${c.page}</span></div>
-          <div class="citation-snippet">${esc(c.snippet||'')}</div>
-        </div>`).join('')}</div>` : '';
+    ? `<div class="citations-bar">
+        <div class="citations-label">📚 Sources from document</div>
+        ${msg.citations.slice(0,5).map(c=>`
+          <div class="citation-item">
+            <div class="citation-header">
+              <span class="citation-file">📄 ${esc(c.filename ? c.filename.replace(/\.pdf$/i,'') : 'Document')}</span>
+              <span class="citation-page">Page ${c.page}</span>
+            </div>
+            <div class="citation-snippet">"${esc((c.snippet||'').slice(0,280).replace(/\n/g,' '))}…"</div>
+          </div>`).join('')}
+       </div>` : '';
   div.innerHTML = `
     ${msg.role==='user' ? `<div class="avatar user-avatar">U</div>` : `<div class="avatar ai-avatar">✦</div>`}
     <div class="bubble md-content">${renderMD(msg.content)}${citHtml}</div>`;
@@ -328,15 +334,15 @@ async function generateTimeline() {
 
 async function generateStudy() {
   if (!state.activeDocId) return;
-  showLoader('Generating study materials...');
+  showLoader('Generating study materials — this may take ~30s...');
   try {
     const res = await fetch(`${API}/api/study-mode`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({doc_id:state.activeDocId}) });
     const data = await res.json();
     hideLoader();
     if (data.error) return showToast('Study gen failed: '+data.error, 'error');
-    state.studyData = data;
-    renderStudyTab(state.currentStudyTab);
-    showToast('Study materials generated!', 'success');
+    window._appState.studyData = data;
+    renderStudyMode(data, state.currentStudyTab);
+    showToast('Study materials ready!', 'success');
   } catch(e) { hideLoader(); showToast('Error: '+e.message,'error'); }
 }
 
@@ -344,10 +350,13 @@ function switchStudyTab(tab, btn) {
   document.querySelectorAll('.study-tab').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
   state.currentStudyTab = tab;
-  if (state.studyData) renderStudyTab(tab);
+  window._appState.currentStudyTab = tab;
+  if (window._appState.studyData) renderStudyMode(window._appState.studyData, tab);
 }
 
-function filterByDifficulty() { if (state.studyData) renderStudyTab(state.currentStudyTab); }
+function filterByDifficulty() {
+  if (window._appState?.studyData) renderStudyMode(window._appState.studyData, window._appState.currentStudyTab || 'flashcards');
+}
 
 // ── Loader helpers ────────────────────────
 function showLoader(txt) { DOM.loaderText.textContent = txt; DOM.featureLoader.style.display = 'grid'; }

@@ -1,28 +1,28 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>ChatPDF — AI Document Intelligence</title>
-  <meta name="description" content="Chat with your PDFs using AI. Upload research papers, notes, books and ask questions powered by RAG and Gemini." />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css" />
+  <meta name="description" content="Chat with PDFs, generate knowledge graphs, mind maps, timelines and study materials using AI."/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <link rel="stylesheet" href="/static/style.css"/>
 </head>
 <body>
 
-<!-- ═══════════════════════ SIDEBAR ═══════════════════════ -->
+<!-- ═══ SIDEBAR ═══ -->
 <aside class="sidebar" id="sidebar">
   <div class="sidebar-header">
     <div class="logo">
       <div class="logo-icon">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          <polyline points="14,2 14,8 20,8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <polyline points="14,2 14,8 20,8" stroke="currentColor" stroke-width="2"/>
           <line x1="16" y1="13" x2="8" y2="13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
           <line x1="16" y1="17" x2="8" y2="17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          <polyline points="10,9 9,9 8,9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
         </svg>
       </div>
       <span class="logo-text">ChatPDF</span>
@@ -33,20 +33,28 @@
   <div class="upload-section">
     <div class="upload-zone" id="uploadZone">
       <div class="upload-icon-wrap">
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          <polyline points="17,8 12,3 7,8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <polyline points="17,8 12,3 7,8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
           <line x1="12" y1="3" x2="12" y2="15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
         </svg>
       </div>
-      <p class="upload-text">Drop PDF here</p>
-      <p class="upload-subtext">or click to browse</p>
-      <input type="file" id="fileInput" accept=".pdf" hidden />
+      <p class="upload-text">Drop PDFs here</p>
+      <p class="upload-subtext">or click to browse · up to 100 files</p>
+      <input type="file" id="fileInput" accept=".pdf" hidden multiple/>
     </div>
     <div class="upload-progress" id="uploadProgress" style="display:none;">
       <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
       <span class="progress-label" id="progressLabel">Processing…</span>
     </div>
+  </div>
+
+  <!-- Cross-Doc Toggle -->
+  <div class="cross-doc-bar" id="crossDocBar" style="display:none;">
+    <button class="cross-doc-btn" id="btnCrossDoc" onclick="openCrossDoc()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20" stroke="currentColor" stroke-width="2"/></svg>
+      Cross-Document Chat
+    </button>
   </div>
 
   <!-- Document List -->
@@ -57,59 +65,30 @@
     </div>
     <div class="doc-list" id="docList">
       <div class="empty-docs">
-        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" opacity="0.3">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" stroke-width="1.5"/>
-          <polyline points="14,2 14,8 20,8" stroke="currentColor" stroke-width="1.5"/>
-        </svg>
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" opacity="0.25"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" stroke-width="1.5"/><polyline points="14,2 14,8 20,8" stroke="currentColor" stroke-width="1.5"/></svg>
         <p>No documents yet</p>
       </div>
     </div>
   </div>
-
-
 </aside>
 
-<!-- ═══════════════════════ MAIN ═══════════════════════ -->
+<!-- ═══ MAIN PANEL ═══ -->
 <main class="main" id="main">
 
   <!-- Welcome Screen -->
   <div class="welcome-screen" id="welcomeScreen">
     <div class="welcome-content">
-      <div class="welcome-orb"></div>
+      <div class="welcome-orb">📄</div>
       <h1 class="welcome-title">Chat with your PDFs</h1>
-      <p class="welcome-subtitle">Upload a document and start asking questions.<br/>Powered by RAG + Groq AI (Llama 3.3).</p>
-
+      <p class="welcome-subtitle">Upload documents and unlock AI-powered intelligence.<br/>Powered by RAG + Groq AI (Llama 3.3).</p>
       <div class="feature-grid">
-        <div class="feature-card">
-          <div class="feature-icon">🔍</div>
-          <div class="feature-text">
-            <strong>Smart Search</strong>
-            <span>Semantic retrieval finds the exact context</span>
-          </div>
-        </div>
-        <div class="feature-card">
-          <div class="feature-icon">📋</div>
-          <div class="feature-text">
-            <strong>Summarize</strong>
-            <span>Get instant document summaries</span>
-          </div>
-        </div>
-        <div class="feature-card">
-          <div class="feature-icon">🎓</div>
-          <div class="feature-text">
-            <strong>Generate MCQs</strong>
-            <span>Create quiz questions from any document</span>
-          </div>
-        </div>
-        <div class="feature-card">
-          <div class="feature-icon">📖</div>
-          <div class="feature-text">
-            <strong>Chapter Explainer</strong>
-            <span>Deep-dive into any section or chapter</span>
-          </div>
-        </div>
+        <div class="feature-card"><div class="feature-icon">💬</div><div class="feature-text"><strong>Smart Chat</strong><span>Ask anything, get cited answers</span></div></div>
+        <div class="feature-card"><div class="feature-icon">🌐</div><div class="feature-text"><strong>Cross-Document</strong><span>Query 20–100 PDFs at once</span></div></div>
+        <div class="feature-card"><div class="feature-icon">🕸️</div><div class="feature-text"><strong>Knowledge Graph</strong><span>See entity relationships visually</span></div></div>
+        <div class="feature-card"><div class="feature-icon">🗺️</div><div class="feature-text"><strong>Mind Map</strong><span>Interactive collapsible map</span></div></div>
+        <div class="feature-card"><div class="feature-icon">🎓</div><div class="feature-text"><strong>Study Mode</strong><span>Flashcards, MCQs, Viva prep</span></div></div>
+        <div class="feature-card"><div class="feature-icon">📅</div><div class="feature-text"><strong>Timeline</strong><span>Auto-extract events & dates</span></div></div>
       </div>
-
       <div class="supported-types">
         <span class="type-badge">📚 Research Papers</span>
         <span class="type-badge">📓 College Notes</span>
@@ -119,67 +98,236 @@
     </div>
   </div>
 
-  <!-- Chat Screen -->
-  <div class="chat-screen" id="chatScreen" style="display:none;">
+  <!-- Document Panel (shown when doc selected) -->
+  <div class="doc-panel" id="docPanel" style="display:none;">
 
-    <!-- Chat Header -->
-    <div class="chat-header">
-      <div class="chat-doc-info">
-        <div class="chat-doc-icon">📄</div>
-        <div class="chat-doc-details">
-          <h2 class="chat-doc-name" id="chatDocName">Document</h2>
-          <span class="chat-doc-meta" id="chatDocMeta"></span>
+    <!-- Doc Header -->
+    <div class="doc-header">
+      <div class="doc-header-info">
+        <div class="doc-header-icon">📄</div>
+        <div>
+          <h2 class="doc-header-name" id="docHeaderName">Document</h2>
+          <span class="doc-header-meta" id="docHeaderMeta"></span>
         </div>
       </div>
-      <div class="chat-actions">
+      <div class="header-actions">
         <button class="btn-ghost" id="btnNewChat" title="New Chat">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-            <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          </svg>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           New Chat
         </button>
       </div>
     </div>
 
-    <!-- Messages -->
-    <div class="messages-container" id="messagesContainer">
-      <div class="messages" id="messages"></div>
+    <!-- Feature Tabs -->
+    <div class="feature-tabs">
+      <button class="tab-btn active" data-tab="chat" onclick="switchTab('chat', this)">💬 Chat</button>
+      <button class="tab-btn" data-tab="study" onclick="switchTab('study', this)">🎓 Study</button>
+      <button class="tab-btn" data-tab="graph" onclick="switchTab('graph', this)">🕸️ Graph</button>
+      <button class="tab-btn" data-tab="mindmap" onclick="switchTab('mindmap', this)">🗺️ Mind Map</button>
+      <button class="tab-btn" data-tab="timeline" onclick="switchTab('timeline', this)">📅 Timeline</button>
+      <button class="tab-btn" data-tab="notebook" onclick="switchTab('notebook', this)">📒 Notebook</button>
     </div>
 
-    <!-- Quick Prompts -->
-    <div class="quick-prompts" id="quickPrompts">
-      <button class="prompt-chip" data-prompt="Summarize this document.">📋 Summarize</button>
-      <button class="prompt-chip" data-prompt="Generate 5 MCQs from this document.">🎓 Generate MCQs</button>
-      <button class="prompt-chip" data-prompt="What are the key points in this document?">🔑 Key Points</button>
-      <button class="prompt-chip" data-prompt="Explain Chapter 1.">📖 Explain Chapter 1</button>
+    <!-- ─── TAB: CHAT ─── -->
+    <div class="tab-content active" id="tab-chat">
+      <div class="messages-container" id="messagesContainer">
+        <div class="messages" id="messages"></div>
+      </div>
+      <div class="quick-prompts" id="quickPrompts">
+        <button class="prompt-chip" data-prompt="Summarize this document.">📋 Summarize</button>
+        <button class="prompt-chip" data-prompt="Generate 5 MCQs from this document.">🎓 MCQs</button>
+        <button class="prompt-chip" data-prompt="What are the key points?">🔑 Key Points</button>
+        <button class="prompt-chip" data-prompt="Explain Chapter 1.">📖 Chapter 1</button>
+        <button class="prompt-chip" data-prompt="What is the conclusion?">✅ Conclusion</button>
+      </div>
+      <div class="input-area">
+        <div class="input-wrapper">
+          <textarea id="chatInput" class="chat-input" placeholder="Ask anything about this document…" rows="1" maxlength="2000"></textarea>
+          <button class="send-btn" id="sendBtn" disabled>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><line x1="22" y1="2" x2="11" y2="13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><polygon points="22,2 15,22 11,13 2,9" fill="currentColor"/></svg>
+          </button>
+        </div>
+        <p class="input-hint">Press <kbd>Enter</kbd> to send · <kbd>Shift+Enter</kbd> for new line</p>
+      </div>
     </div>
 
-    <!-- Input Area -->
+    <!-- ─── TAB: STUDY ─── -->
+    <div class="tab-content" id="tab-study">
+      <div class="feature-panel">
+        <div class="feature-toolbar">
+          <div class="study-tabs">
+            <button class="study-tab active" onclick="switchStudyTab('flashcards', this)">Flashcards</button>
+            <button class="study-tab" onclick="switchStudyTab('mcqs', this)">MCQs</button>
+            <button class="study-tab" onclick="switchStudyTab('fill_blanks', this)">Fill Blanks</button>
+            <button class="study-tab" onclick="switchStudyTab('viva', this)">Viva Q&A</button>
+          </div>
+          <div class="toolbar-right">
+            <select class="difficulty-filter" id="difficultyFilter" onchange="filterByDifficulty()">
+              <option value="all">All Levels</option>
+              <option value="easy">Easy</option>
+              <option value="medium">Medium</option>
+              <option value="hard">Hard</option>
+            </select>
+            <button class="btn-generate" onclick="generateStudy()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M23 7l-7 5 7 5V7z" fill="currentColor"/><rect x="1" y="5" width="15" height="14" rx="2" fill="currentColor" opacity=".3"/></svg>
+              Generate
+            </button>
+          </div>
+        </div>
+        <div class="study-content" id="studyContent">
+          <div class="feature-empty">
+            <div class="feature-empty-icon">🎓</div>
+            <p>Click <strong>Generate</strong> to create study materials from this document.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── TAB: KNOWLEDGE GRAPH ─── -->
+    <div class="tab-content" id="tab-graph">
+      <div class="feature-panel">
+        <div class="feature-toolbar">
+          <div class="graph-legend" id="graphLegend" style="display:none;">
+            <span class="legend-item person">Person</span>
+            <span class="legend-item org">Organization</span>
+            <span class="legend-item tech">Technology</span>
+            <span class="legend-item concept">Concept</span>
+            <span class="legend-item date">Date/Event</span>
+          </div>
+          <div class="toolbar-right">
+            <span class="graph-hint" id="graphHint" style="display:none;">Drag nodes · Scroll to zoom · Click to highlight</span>
+            <button class="btn-generate" onclick="generateGraph()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"/><path d="M12 8v4l3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              Generate Graph
+            </button>
+          </div>
+        </div>
+        <div class="graph-container" id="graphContainer">
+          <div class="feature-empty">
+            <div class="feature-empty-icon">🕸️</div>
+            <p>Click <strong>Generate Graph</strong> to extract entities and relationships.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── TAB: MIND MAP ─── -->
+    <div class="tab-content" id="tab-mindmap">
+      <div class="feature-panel">
+        <div class="feature-toolbar">
+          <span class="graph-hint" id="mapHint" style="display:none;">Click nodes to expand/collapse · Scroll to zoom</span>
+          <div class="toolbar-right">
+            <button class="btn-ghost" id="btnResetMap" style="display:none;" onclick="resetMap()">Reset Zoom</button>
+            <button class="btn-generate" onclick="generateMap()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z" stroke="currentColor" stroke-width="2"/></svg>
+              Generate Map
+            </button>
+          </div>
+        </div>
+        <div class="graph-container" id="mapContainer">
+          <div class="feature-empty">
+            <div class="feature-empty-icon">🗺️</div>
+            <p>Click <strong>Generate Map</strong> to create an interactive mind map.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── TAB: TIMELINE ─── -->
+    <div class="tab-content" id="tab-timeline">
+      <div class="feature-panel">
+        <div class="feature-toolbar">
+          <div class="toolbar-right">
+            <button class="btn-generate" onclick="generateTimeline()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="18" rx="2" stroke="currentColor" stroke-width="2"/><line x1="16" y1="2" x2="16" y2="6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="8" y1="2" x2="8" y2="6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="3" y1="10" x2="21" y2="10" stroke="currentColor" stroke-width="2"/></svg>
+              Generate Timeline
+            </button>
+          </div>
+        </div>
+        <div class="timeline-container" id="timelineContainer">
+          <div class="feature-empty">
+            <div class="feature-empty-icon">📅</div>
+            <p>Click <strong>Generate Timeline</strong> to extract events and dates from the document.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── TAB: NOTEBOOK ─── -->
+    <div class="tab-content" id="tab-notebook">
+      <div class="feature-panel notebook-panel">
+        <div class="feature-toolbar">
+          <div class="notebook-search">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="2"/><path d="m21 21-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <input type="text" id="notebookSearch" placeholder="Search notes…" oninput="searchNotebook()"/>
+          </div>
+          <div class="toolbar-right">
+            <button class="btn-ghost" onclick="clearNotebook()">Clear All</button>
+            <button class="btn-generate" onclick="addNoteManually()">+ Add Note</button>
+          </div>
+        </div>
+        <div class="notebook-content" id="notebookContent">
+          <div class="feature-empty">
+            <div class="feature-empty-icon">📒</div>
+            <p>Notes are automatically saved from your chat answers.<br/>They also appear here when you ask questions.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- end doc-panel -->
+
+  <!-- Cross-Doc Panel -->
+  <div class="cross-doc-panel" id="crossDocPanel" style="display:none;">
+    <div class="doc-header">
+      <div class="doc-header-info">
+        <div class="doc-header-icon">🌐</div>
+        <div>
+          <h2 class="doc-header-name">Cross-Document Intelligence</h2>
+          <span class="doc-header-meta" id="crossDocMeta">Searching across all documents</span>
+        </div>
+      </div>
+      <button class="btn-ghost" onclick="closeCrossDoc()">← Back</button>
+    </div>
+    <div class="cross-doc-info">
+      <p>Ask questions across <strong id="crossDocCount">all</strong> uploaded documents simultaneously.</p>
+      <div class="cross-doc-examples">
+        <button class="prompt-chip" onclick="sendCrossQuery(this)" data-prompt="What are the common themes across all documents?">Common themes</button>
+        <button class="prompt-chip" onclick="sendCrossQuery(this)" data-prompt="Compare the methodologies used across documents.">Compare methods</button>
+        <button class="prompt-chip" onclick="sendCrossQuery(this)" data-prompt="Create a timeline of events from all documents.">Combined timeline</button>
+        <button class="prompt-chip" onclick="sendCrossQuery(this)" data-prompt="Which documents discuss similar topics?">Find similar docs</button>
+      </div>
+    </div>
+    <div class="messages-container" id="crossMessages" style="flex:1;">
+      <div class="messages" id="crossMsgList"></div>
+    </div>
     <div class="input-area">
       <div class="input-wrapper">
-        <textarea
-          id="chatInput"
-          class="chat-input"
-          placeholder="Ask anything about this document…"
-          rows="1"
-          maxlength="2000"
-        ></textarea>
-        <button class="send-btn" id="sendBtn" title="Send" disabled>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-            <line x1="22" y1="2" x2="11" y2="13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            <polygon points="22,2 15,22 11,13 2,9" fill="currentColor"/>
-          </svg>
+        <textarea id="crossInput" class="chat-input" placeholder="Ask across all documents…" rows="1"></textarea>
+        <button class="send-btn" id="crossSendBtn" onclick="sendCrossChat()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><line x1="22" y1="2" x2="11" y2="13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><polygon points="22,2 15,22 11,13 2,9" fill="currentColor"/></svg>
         </button>
       </div>
-      <p class="input-hint">Press <kbd>Enter</kbd> to send · <kbd>Shift+Enter</kbd> for new line</p>
     </div>
   </div>
 
 </main>
 
-<!-- ═══════════════════════ TOAST ═══════════════════════ -->
 <div class="toast-container" id="toastContainer"></div>
 
+<!-- Loading overlay for features -->
+<div class="feature-loader" id="featureLoader" style="display:none;">
+  <div class="loader-box">
+    <div class="loader-spinner"></div>
+    <p id="loaderText">Generating...</p>
+  </div>
+</div>
+
 <script src="/static/app.js"></script>
+<script src="/static/graph.js"></script>
+<script src="/static/mindmap.js"></script>
+<script src="/static/studymode.js"></script>
+<script src="/static/timeline_viz.js"></script>
+<script src="/static/notebook.js"></script>
 </body>
 </html>

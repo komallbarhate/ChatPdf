@@ -1,13 +1,12 @@
 """
-RAG Engine -- Core pipeline for PDF processing, embedding, retrieval.
-Handles: PDF parsing -> chunking -> embedding -> numpy vector search -> retrieval
-Uses pypdf (pure Python) + numpy cosine similarity -- no C++ compilation needed.
+RAG Engine -- Enhanced with multi-doc, entity extraction, mind-map, timeline & study mode.
 """
 
 import os
 import re
 import uuid
 import time
+import json
 import numpy as np
 from pathlib import Path
 from dataclasses import dataclass, asdict
@@ -24,11 +23,11 @@ load_dotenv()
 #  Configuration
 # ──────────────────────────────────────────
 
-CHUNK_SIZE      = 500   # words per chunk
-CHUNK_OVERLAP   = 80    # overlapping words between chunks
-TOP_K           = 6     # top-k chunks to retrieve
+CHUNK_SIZE      = 500
+CHUNK_OVERLAP   = 80
+TOP_K           = 6
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-GROQ_MODEL      = "llama-3.3-70b-versatile"   # free, fast, capable
+GROQ_MODEL      = "llama-3.3-70b-versatile"
 UPLOAD_DIR      = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
@@ -43,6 +42,7 @@ class Chunk:
     page: int
     chunk_idx: int
     doc_id: str
+    filename: str = ""   # for cross-doc citation
 
 @dataclass
 class DocumentMeta:
@@ -56,35 +56,24 @@ class DocumentMeta:
 
 
 # ──────────────────────────────────────────
-#  PDF Processor  (pypdf — pure Python)
+#  PDF Processor
 # ──────────────────────────────────────────
 
 class PDFProcessor:
-    """Extracts clean text from PDF files page by page using pypdf."""
-
     @staticmethod
     def extract(pdf_path: str) -> Tuple[str, int, Dict[int, str]]:
-        """
-        Returns:
-            full_text      : entire document text
-            num_pages      : page count
-            page_texts     : {page_num (1-based): text}
-        """
         page_texts: Dict[int, str] = {}
         full_parts: List[str] = []
-
         with open(pdf_path, "rb") as f:
             reader = pypdf.PdfReader(f)
             for i, page in enumerate(reader.pages):
                 text = page.extract_text() or ""
-                # Clean whitespace artifacts
                 text = re.sub(r'\n{3,}', '\n\n', text)
                 text = re.sub(r' {2,}', ' ', text)
                 text = text.strip()
                 page_texts[i + 1] = text
                 if text:
                     full_parts.append(text)
-
         return "\n\n".join(full_parts), len(reader.pages), page_texts
 
 
@@ -93,13 +82,10 @@ class PDFProcessor:
 # ──────────────────────────────────────────
 
 class TextChunker:
-    """Sliding-window word-based chunking with page attribution."""
-
     @staticmethod
-    def chunk_pages(page_texts: Dict[int, str], doc_id: str) -> List[Chunk]:
+    def chunk_pages(page_texts: Dict[int, str], doc_id: str, filename: str = "") -> List[Chunk]:
         chunks: List[Chunk] = []
         chunk_idx = 0
-
         for page_num, text in page_texts.items():
             if not text.strip():
                 continue
@@ -108,51 +94,40 @@ class TextChunker:
             while start < len(words):
                 end = min(start + CHUNK_SIZE, len(words))
                 chunk_text = " ".join(words[start:end])
-                if len(chunk_text.strip()) > 30:   # skip tiny fragments
+                if len(chunk_text.strip()) > 30:
                     chunks.append(Chunk(
                         text=chunk_text,
                         page=page_num,
                         chunk_idx=chunk_idx,
                         doc_id=doc_id,
+                        filename=filename,
                     ))
                     chunk_idx += 1
                 if end == len(words):
                     break
                 start += CHUNK_SIZE - CHUNK_OVERLAP
-
         return chunks
 
 
 # ──────────────────────────────────────────
-#  Embedding Store (numpy cosine similarity)
+#  Embedding Store
 # ──────────────────────────────────────────
 
 class EmbeddingStore:
-    """
-    Manages sentence-transformer embeddings with numpy-based cosine similarity.
-    No FAISS / no C++ needed — works on any Python version.
-    """
-
-    _model: Optional[SentenceTransformer] = None   # shared singleton
+    _model: Optional[SentenceTransformer] = None
 
     def __init__(self):
         if EmbeddingStore._model is None:
-            print(f"[EmbeddingStore] Loading model: {EMBEDDING_MODEL} …")
+            print(f"[EmbeddingStore] Loading model: {EMBEDDING_MODEL} ...")
             EmbeddingStore._model = SentenceTransformer(EMBEDDING_MODEL)
             print("[EmbeddingStore] Model ready OK")
-
         self.model = EmbeddingStore._model
-        # doc_id → {"embeddings": np.ndarray (N, D), "chunks": List[Chunk]}
         self._stores: Dict[str, Dict] = {}
 
     def add_document(self, doc_id: str, chunks: List[Chunk]) -> None:
         texts = [c.text for c in chunks]
-        embeddings = self.model.encode(
-            texts,
-            show_progress_bar=False,
-            batch_size=32,
-            normalize_embeddings=True,   # unit-norm → dot product = cosine
-        )
+        embeddings = self.model.encode(texts, show_progress_bar=False,
+                                       batch_size=32, normalize_embeddings=True)
         self._stores[doc_id] = {
             "embeddings": np.array(embeddings, dtype="float32"),
             "chunks": chunks,
@@ -165,25 +140,40 @@ class EmbeddingStore:
     def retrieve(self, doc_id: str, query: str, top_k: int = TOP_K) -> List[Chunk]:
         if doc_id not in self._stores:
             return []
-        store = self._stores[doc_id]
-        q_emb = self.model.encode([query], normalize_embeddings=True)
-        q_emb = np.array(q_emb, dtype="float32")   # shape (1, D)
+        return self._search(self._stores[doc_id], query, top_k)
 
-        # Cosine similarity via dot product (embeddings are unit-normed)
-        scores = store["embeddings"] @ q_emb.T      # shape (N, 1)
-        scores = scores.flatten()
+    def retrieve_global(self, query: str, doc_ids: Optional[List[str]] = None,
+                        top_k: int = 10) -> List[Chunk]:
+        """Search across ALL (or selected) documents."""
+        all_chunks, all_embeddings = [], []
+        ids = doc_ids if doc_ids else list(self._stores.keys())
+        for did in ids:
+            if did not in self._stores:
+                continue
+            store = self._stores[did]
+            all_chunks.extend(store["chunks"])
+            all_embeddings.append(store["embeddings"])
+        if not all_chunks:
+            return []
+        combined = np.vstack(all_embeddings)
+        q_emb = np.array(self.model.encode([query], normalize_embeddings=True), dtype="float32")
+        scores = (combined @ q_emb.T).flatten()
+        top_idx = np.argsort(scores)[::-1][:top_k]
+        return [all_chunks[i] for i in top_idx]
 
+    def _search(self, store: Dict, query: str, top_k: int) -> List[Chunk]:
+        q_emb = np.array(self.model.encode([query], normalize_embeddings=True), dtype="float32")
+        scores = (store["embeddings"] @ q_emb.T).flatten()
         k = min(top_k, len(store["chunks"]))
-        top_indices = np.argsort(scores)[::-1][:k]
-
-        return [store["chunks"][i] for i in top_indices]
+        top_idx = np.argsort(scores)[::-1][:k]
+        return [store["chunks"][i] for i in top_idx]
 
     def has_document(self, doc_id: str) -> bool:
         return doc_id in self._stores
 
 
 # ──────────────────────────────────────────
-#  Groq LLM Client  (free tier)
+#  Groq LLM Client
 # ──────────────────────────────────────────
 
 class GroqLLMClient:
@@ -196,7 +186,8 @@ class GroqLLMClient:
             )
         self.client = Groq(api_key=api_key)
 
-    def generate(self, system_prompt: str, user_message: str) -> str:
+    def generate(self, system_prompt: str, user_message: str,
+                 temperature: float = 0.3, max_tokens: int = 2048) -> str:
         try:
             response = self.client.chat.completions.create(
                 model=GROQ_MODEL,
@@ -204,126 +195,230 @@ class GroqLLMClient:
                     {"role": "system", "content": system_prompt},
                     {"role": "user",   "content": user_message},
                 ],
-                temperature=0.3,
-                max_tokens=2048,
+                temperature=temperature,
+                max_tokens=max_tokens,
             )
             return response.choices[0].message.content
         except Exception as e:
             return f"LLM Error: {str(e)}"
 
+    def generate_json(self, system_prompt: str, user_message: str,
+                      max_tokens: int = 3000) -> dict:
+        """Generate and parse a JSON response."""
+        raw = self.generate(system_prompt, user_message,
+                            temperature=0.1, max_tokens=max_tokens)
+        # Extract JSON block from response
+        match = re.search(r'```json\s*([\s\S]*?)\s*```', raw)
+        if match:
+            raw = match.group(1)
+        else:
+            # Try to find first { or [
+            m = re.search(r'(\{[\s\S]*\}|\[[\s\S]*\])', raw)
+            if m:
+                raw = m.group(1)
+        try:
+            return json.loads(raw)
+        except Exception:
+            return {"error": "Failed to parse JSON", "raw": raw}
+
 
 # ──────────────────────────────────────────
-#  RAG Chain
+#  RAG Chain (single-doc + cross-doc)
 # ──────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are an expert AI assistant that answers questions based ONLY on the provided document excerpts.
+CHAT_SYSTEM = """You are an expert AI assistant answering questions based ONLY on provided document excerpts.
 
 Rules:
-1. Answer using ONLY the information in the provided context.
-2. If the answer is not in the context, say "I couldn't find this in the document."
-3. Always cite the page numbers where you found the information.
-4. Be precise, clear, and well-structured.
-5. For MCQ generation, create 5 multiple-choice questions with 4 options each and mark the correct answer.
-6. For summaries, be comprehensive but concise.
+1. Answer using ONLY the information in the context below.
+2. If the answer is not found, say exactly: "I couldn't find this in the provided documents."
+3. ALWAYS cite sources: mention the document name and page number.
+4. Be precise, clear, and well-structured with markdown formatting.
+5. For MCQs: create 5 questions with 4 options (A/B/C/D) and mark the correct answer.
+6. For summaries: be comprehensive but concise.
 """
 
-def build_context_prompt(chunks: List[Chunk], query: str) -> str:
-    context_parts = []
-    for chunk in chunks:
-        context_parts.append(f"[Page {chunk.page}]\n{chunk.text}")
-    context = "\n\n---\n\n".join(context_parts)
-    return f"""DOCUMENT EXCERPTS:
-{context}
-
----
-
-USER QUESTION: {query}
-
-Please answer based on the document excerpts above. Always mention which page(s) you referenced."""
+def build_context(chunks: List[Chunk], query: str) -> str:
+    parts = []
+    for c in chunks:
+        label = f"[{c.filename or 'Document'} — Page {c.page}]"
+        parts.append(f"{label}\n{c.text}")
+    context = "\n\n---\n\n".join(parts)
+    return f"DOCUMENT EXCERPTS:\n{context}\n\n---\n\nQUESTION: {query}\n\nAnswer with citations (document name + page number):"
 
 
 class RAGChain:
-    """Orchestrates the full RAG pipeline for a single document."""
-
-    def __init__(self, embedding_store: EmbeddingStore, llm: GeminiClient):
-        self.embedding_store = embedding_store
+    def __init__(self, embedding_store: EmbeddingStore, llm: GroqLLMClient):
+        self.store = embedding_store
         self.llm = llm
 
     def query(self, doc_id: str, question: str) -> Dict:
-        # 1. Detect special intent and expand query
-        retrieval_query = self._enhance_query(question)
-
-        # 2. Retrieve relevant chunks
-        chunks = self.embedding_store.retrieve(doc_id, retrieval_query)
+        chunks = self.store.retrieve(doc_id, self._enhance(question))
         if not chunks:
-            return {"answer": "No relevant content found in this document.", "sources": []}
-
-        # 3. Build prompt and call LLM
-        user_prompt = build_context_prompt(chunks, question)
-        answer = self.llm.generate(SYSTEM_PROMPT, user_prompt)
-
-        # 4. Extract source pages
-        sources = sorted(set(c.page for c in chunks))
-
+            return {"answer": "No relevant content found.", "sources": [], "citations": []}
+        answer = self.llm.generate(CHAT_SYSTEM, build_context(chunks, question))
         return {
             "answer": answer,
-            "sources": sources,
+            "sources": sorted(set(c.page for c in chunks)),
+            "citations": [{"filename": c.filename, "page": c.page, "snippet": c.text[:200]} for c in chunks],
+            "chunks_used": len(chunks),
+        }
+
+    def query_multi(self, question: str, doc_ids: Optional[List[str]] = None) -> Dict:
+        """Cross-document RAG query."""
+        chunks = self.store.retrieve_global(self._enhance(question), doc_ids, top_k=12)
+        if not chunks:
+            return {"answer": "No relevant content found across documents.", "sources": [], "citations": []}
+        answer = self.llm.generate(CHAT_SYSTEM, build_context(chunks, question))
+        return {
+            "answer": answer,
+            "sources": sorted(set(c.page for c in chunks)),
+            "citations": [{"filename": c.filename, "page": c.page, "snippet": c.text[:200]} for c in chunks],
             "chunks_used": len(chunks),
         }
 
     @staticmethod
-    def _enhance_query(question: str) -> str:
-        """Expands special commands into richer retrieval queries."""
-        q_lower = question.lower().strip()
-        if q_lower in ("summarize", "summarize this", "summarize this document",
-                        "give me a summary", "tldr"):
+    def _enhance(question: str) -> str:
+        q = question.lower().strip()
+        if q in ("summarize", "summarize this", "summarize this document", "tldr"):
             return "main topics overview introduction conclusion key points summary"
-        if "mcq" in q_lower or "multiple choice" in q_lower:
+        if "mcq" in q or "multiple choice" in q:
             return "key concepts facts definitions important points"
-        m = re.search(r'chapter\s+(\d+)', q_lower)
+        m = re.search(r'chapter\s+(\d+)', q)
         if m:
-            return f"chapter {m.group(1)} content topics introduction"
+            return f"chapter {m.group(1)} content topics"
         return question
 
 
 # ──────────────────────────────────────────
-#  Document Manager (single global state)
+#  Knowledge Graph Extractor
+# ──────────────────────────────────────────
+
+KG_SYSTEM = """You are an expert knowledge graph extractor.
+Extract entities and relationships from the text and return ONLY valid JSON in this exact format:
+{
+  "nodes": [
+    {"id": "unique_id", "label": "Entity Name", "type": "Person|Organization|Technology|Concept|Date|Location|Other", "description": "brief description"}
+  ],
+  "edges": [
+    {"source": "source_id", "target": "target_id", "label": "relationship description"}
+  ]
+}
+Extract 15-30 nodes and 15-40 edges. Focus on the most important entities and their key relationships.
+Return ONLY the JSON object, no other text."""
+
+def extract_knowledge_graph(llm: GroqLLMClient, chunks: List[Chunk]) -> Dict:
+    text = "\n\n".join(c.text for c in chunks[:15])
+    return llm.generate_json(KG_SYSTEM, f"Extract knowledge graph from:\n\n{text}", max_tokens=4000)
+
+
+# ──────────────────────────────────────────
+#  Mind Map Generator
+# ──────────────────────────────────────────
+
+MINDMAP_SYSTEM = """You are an expert mind map creator.
+Create a hierarchical mind map from the document and return ONLY valid JSON:
+{
+  "name": "Central Topic",
+  "children": [
+    {
+      "name": "Main Branch 1",
+      "children": [
+        {"name": "Sub-topic 1.1", "children": []},
+        {"name": "Sub-topic 1.2", "children": []}
+      ]
+    }
+  ]
+}
+Create 4-6 main branches with 3-5 sub-topics each. Max depth: 3 levels.
+Return ONLY the JSON object, no other text."""
+
+def generate_mind_map(llm: GroqLLMClient, chunks: List[Chunk]) -> Dict:
+    text = "\n\n".join(c.text for c in chunks[:12])
+    return llm.generate_json(MINDMAP_SYSTEM, f"Create mind map from:\n\n{text}", max_tokens=3000)
+
+
+# ──────────────────────────────────────────
+#  Timeline Extractor
+# ──────────────────────────────────────────
+
+TIMELINE_SYSTEM = """You are an expert timeline extractor.
+Extract all events with dates/times from the text and return ONLY valid JSON:
+{
+  "title": "Document Timeline",
+  "events": [
+    {
+      "date": "YYYY or YYYY-MM or YYYY-MM-DD",
+      "title": "Event Title",
+      "description": "Brief description",
+      "category": "Historical|Scientific|Political|Personal|Technical|Other"
+    }
+  ]
+}
+Sort events chronologically. Include 5-20 events. If exact dates are uncertain, use approximate years.
+Return ONLY the JSON object, no other text."""
+
+def extract_timeline(llm: GroqLLMClient, chunks: List[Chunk]) -> Dict:
+    text = "\n\n".join(c.text for c in chunks[:15])
+    return llm.generate_json(TIMELINE_SYSTEM, f"Extract timeline from:\n\n{text}", max_tokens=3000)
+
+
+# ──────────────────────────────────────────
+#  Study Mode Generator
+# ──────────────────────────────────────────
+
+STUDY_SYSTEM = """You are an expert educator creating study materials.
+Generate comprehensive study materials and return ONLY valid JSON:
+{
+  "flashcards": [
+    {"front": "Question or Term", "back": "Answer or Definition", "difficulty": "easy|medium|hard"}
+  ],
+  "mcqs": [
+    {
+      "question": "Question text",
+      "options": {"A": "option", "B": "option", "C": "option", "D": "option"},
+      "answer": "A",
+      "explanation": "Why this is correct",
+      "difficulty": "easy|medium|hard"
+    }
+  ],
+  "fill_blanks": [
+    {"sentence": "The ___ is responsible for ___.", "answers": ["word1", "word2"], "difficulty": "easy|medium|hard"}
+  ],
+  "viva_questions": [
+    {"question": "Explain...", "key_points": ["point1", "point2"], "difficulty": "easy|medium|hard"}
+  ]
+}
+Generate: 8 flashcards, 5 MCQs, 5 fill-in-the-blanks, 5 viva questions. Mix all difficulty levels.
+Return ONLY the JSON object, no other text."""
+
+def generate_study_materials(llm: GroqLLMClient, chunks: List[Chunk]) -> Dict:
+    text = "\n\n".join(c.text for c in chunks[:12])
+    return llm.generate_json(STUDY_SYSTEM, f"Create study materials from:\n\n{text}", max_tokens=4000)
+
+
+# ──────────────────────────────────────────
+#  Document Manager
 # ──────────────────────────────────────────
 
 class DocumentManager:
-    """Central store for all uploaded documents."""
-
     def __init__(self):
         self.embedding_store = EmbeddingStore()
         self.llm = GroqLLMClient()
         self.rag = RAGChain(self.embedding_store, self.llm)
         self._docs: Dict[str, DocumentMeta] = {}
+        self._chunks: Dict[str, List[Chunk]] = {}
 
     def ingest(self, pdf_path: str, filename: str) -> DocumentMeta:
         doc_id = str(uuid.uuid4())[:8]
         file_size_kb = round(os.path.getsize(pdf_path) / 1024, 1)
-
-        # Extract text
         full_text, num_pages, page_texts = PDFProcessor.extract(pdf_path)
-
-        # Chunk
-        chunks = TextChunker.chunk_pages(page_texts, doc_id)
-
-        # Embed & index
+        chunks = TextChunker.chunk_pages(page_texts, doc_id, filename)
         self.embedding_store.add_document(doc_id, chunks)
-
-        # Build snippet
-        snippet = full_text[:200].replace("\n", " ").strip() + "…"
-
-        meta = DocumentMeta(
-            doc_id=doc_id,
-            filename=filename,
-            num_pages=num_pages,
-            num_chunks=len(chunks),
-            upload_time=time.time(),
-            file_size_kb=file_size_kb,
-            summary_snippet=snippet,
-        )
+        self._chunks[doc_id] = chunks
+        snippet = full_text[:200].replace("\n", " ").strip() + "..."
+        meta = DocumentMeta(doc_id=doc_id, filename=filename, num_pages=num_pages,
+                            num_chunks=len(chunks), upload_time=time.time(),
+                            file_size_kb=file_size_kb, summary_snippet=snippet)
         self._docs[doc_id] = meta
         return meta
 
@@ -332,6 +427,7 @@ class DocumentManager:
             return False
         self.embedding_store.remove_document(doc_id)
         self._docs.pop(doc_id)
+        self._chunks.pop(doc_id, None)
         for f in UPLOAD_DIR.glob(f"{doc_id}_*"):
             f.unlink(missing_ok=True)
         return True
@@ -346,3 +442,30 @@ class DocumentManager:
         if doc_id not in self._docs:
             return {"error": "Document not found."}
         return self.rag.query(doc_id, question)
+
+    def chat_multi(self, question: str, doc_ids: Optional[List[str]] = None) -> Dict:
+        return self.rag.query_multi(question, doc_ids)
+
+    def get_knowledge_graph(self, doc_id: str) -> Dict:
+        chunks = self._get_chunks(doc_id)
+        return extract_knowledge_graph(self.llm, chunks)
+
+    def get_mind_map(self, doc_id: str) -> Dict:
+        chunks = self._get_chunks(doc_id)
+        return generate_mind_map(self.llm, chunks)
+
+    def get_timeline(self, doc_id: str) -> Dict:
+        chunks = self._get_chunks(doc_id)
+        return extract_timeline(self.llm, chunks)
+
+    def get_study_materials(self, doc_id: str) -> Dict:
+        chunks = self._get_chunks(doc_id)
+        return generate_study_materials(self.llm, chunks)
+
+    def _get_chunks(self, doc_id: str) -> List[Chunk]:
+        if doc_id == "all":
+            result = []
+            for chunks in self._chunks.values():
+                result.extend(chunks)
+            return result
+        return self._chunks.get(doc_id, [])

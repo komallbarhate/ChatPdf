@@ -1,11 +1,10 @@
 """
-FastAPI backend for Chat With PDFs application.
-Serves the frontend and exposes REST endpoints for PDF upload and chat.
+FastAPI backend — Enhanced with all advanced features.
 """
 
 import shutil
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -15,25 +14,13 @@ from pydantic import BaseModel
 
 from rag_engine import DocumentManager, UPLOAD_DIR
 
-# ──────────────────────────────────────────
-#  App Setup
-# ──────────────────────────────────────────
+app = FastAPI(title="ChatPDF Advanced", version="2.0.0")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
+                   allow_methods=["*"], allow_headers=["*"])
 
-app = FastAPI(title="Chat With PDFs", version="1.0.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Serve frontend static files
 frontend_dir = Path(__file__).parent / "frontend"
 app.mount("/static", StaticFiles(directory=str(frontend_dir)), name="static")
 
-# Initialise the document manager once (loads embedding model)
 print("\n[*] Initialising RAG engine...")
 try:
     manager = DocumentManager()
@@ -45,97 +32,101 @@ except ValueError as e:
     LLM_READY = False
 
 
-# ──────────────────────────────────────────
-#  Request / Response Models
-# ──────────────────────────────────────────
+# ── Models ──────────────────────────────────
 
 class ChatRequest(BaseModel):
     doc_id: str
     question: str
 
-class ChatResponse(BaseModel):
-    answer: str
-    sources: list[int]
-    chunks_used: int
+class MultiChatRequest(BaseModel):
+    question: str
+    doc_ids: Optional[List[str]] = None
+
+class FeatureRequest(BaseModel):
+    doc_id: str   # can be "all" for multi-doc
 
 
-# ──────────────────────────────────────────
-#  Routes
-# ──────────────────────────────────────────
+# ── Routes ──────────────────────────────────
 
 @app.get("/")
 async def index():
     return FileResponse(str(frontend_dir / "index.html"))
 
-
 @app.get("/api/status")
 async def status():
-    return {
-        "llm_ready": LLM_READY,
-        "message": "API key missing — add GEMINI_API_KEY to .env" if not LLM_READY else "Ready",
-    }
-
+    return {"llm_ready": LLM_READY,
+            "message": "API key missing" if not LLM_READY else "Ready"}
 
 @app.post("/api/upload")
 async def upload_pdf(file: UploadFile = File(...)):
     if not LLM_READY:
-        raise HTTPException(status_code=503,
-                            detail="LLM not configured. Add GEMINI_API_KEY to .env file.")
-
+        raise HTTPException(status_code=503, detail="LLM not configured.")
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
-    # Save to uploads/
     safe_name = "".join(c for c in file.filename if c.isalnum() or c in "._- ")
     temp_path = UPLOAD_DIR / f"tmp_{safe_name}"
-
     try:
         with open(temp_path, "wb") as f:
             shutil.copyfileobj(file.file, f)
-
-        # Ingest into RAG pipeline
         meta = manager.ingest(str(temp_path), file.filename)
-
-        # Rename to doc_id prefixed file
         final_path = UPLOAD_DIR / f"{meta.doc_id}_{safe_name}"
         temp_path.rename(final_path)
-
         return JSONResponse({
-            "success": True,
-            "doc_id": meta.doc_id,
-            "filename": meta.filename,
-            "num_pages": meta.num_pages,
-            "num_chunks": meta.num_chunks,
-            "file_size_kb": meta.file_size_kb,
-            "summary_snippet": meta.summary_snippet,
+            "success": True, "doc_id": meta.doc_id, "filename": meta.filename,
+            "num_pages": meta.num_pages, "num_chunks": meta.num_chunks,
+            "file_size_kb": meta.file_size_kb, "summary_snippet": meta.summary_snippet,
             "message": f"Indexed {meta.num_chunks} chunks from {meta.num_pages} pages",
         })
-
     except Exception as e:
         if temp_path.exists():
             temp_path.unlink()
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
 
-
-@app.post("/api/chat", response_model=ChatResponse)
+@app.post("/api/chat")
 async def chat(req: ChatRequest):
     if not LLM_READY:
         raise HTTPException(status_code=503, detail="LLM not configured.")
-
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
-
     result = manager.chat(req.doc_id, req.question)
-
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])
+    return result
 
-    return ChatResponse(
-        answer=result["answer"],
-        sources=result.get("sources", []),
-        chunks_used=result.get("chunks_used", 0),
-    )
+@app.post("/api/chat-multi")
+async def chat_multi(req: MultiChatRequest):
+    """Cross-document chat — search across all or selected docs."""
+    if not LLM_READY:
+        raise HTTPException(status_code=503, detail="LLM not configured.")
+    if not req.question.strip():
+        raise HTTPException(status_code=400, detail="Question cannot be empty.")
+    return manager.chat_multi(req.question, req.doc_ids)
 
+@app.post("/api/knowledge-graph")
+async def knowledge_graph(req: FeatureRequest):
+    if not LLM_READY:
+        raise HTTPException(status_code=503, detail="LLM not configured.")
+    result = manager.get_knowledge_graph(req.doc_id)
+    return result
+
+@app.post("/api/mind-map")
+async def mind_map(req: FeatureRequest):
+    if not LLM_READY:
+        raise HTTPException(status_code=503, detail="LLM not configured.")
+    return manager.get_mind_map(req.doc_id)
+
+@app.post("/api/timeline")
+async def timeline(req: FeatureRequest):
+    if not LLM_READY:
+        raise HTTPException(status_code=503, detail="LLM not configured.")
+    return manager.get_timeline(req.doc_id)
+
+@app.post("/api/study-mode")
+async def study_mode(req: FeatureRequest):
+    if not LLM_READY:
+        raise HTTPException(status_code=503, detail="LLM not configured.")
+    return manager.get_study_materials(req.doc_id)
 
 @app.get("/api/documents")
 async def list_documents():
@@ -143,25 +134,19 @@ async def list_documents():
         return {"documents": [], "llm_ready": False}
     return {"documents": manager.list_docs(), "llm_ready": True}
 
-
 @app.delete("/api/documents/{doc_id}")
 async def delete_document(doc_id: str):
     if not manager:
         raise HTTPException(status_code=503, detail="LLM not configured.")
-    success = manager.remove(doc_id)
-    if not success:
+    if not manager.remove(doc_id):
         raise HTTPException(status_code=404, detail="Document not found.")
-    return {"success": True, "message": "Document removed."}
+    return {"success": True}
 
-
-# ──────────────────────────────────────────
-#  Entry Point
-# ──────────────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn
     print("=" * 55)
-    print("  ChatPDF -- RAG Application")
+    print("  ChatPDF Advanced -- All Features Active")
     print("  Open: http://localhost:8000")
     print("=" * 55)
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=False)

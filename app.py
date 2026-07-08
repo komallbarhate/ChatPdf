@@ -146,7 +146,7 @@ async def delete_document(doc_id: str):
 if __name__ == "__main__":
     import uvicorn
     import os
-    port = int(os.environ.get("PORT", 8000))
+    port = int(os.environ.get("PORT", 7860))
     print("=" * 55)
     print("  ChatPDF Advanced -- All Features Active")
     print(f"  Open: http://localhost:{port}")

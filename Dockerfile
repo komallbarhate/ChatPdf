@@ -13,8 +13,8 @@ COPY . .
 # Create folders for the database and uploads and give them write permissions
 RUN mkdir -p uploads chroma_db && chmod -R 777 uploads chroma_db frontend
 
-# Hugging Face Spaces uses port 7860
-EXPOSE 7860
+# Render uses port 10000 by default
+EXPOSE 10000
 
 # Run the FastAPI server
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "10000"]

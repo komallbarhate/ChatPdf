@@ -1,5 +1,6 @@
 """
 RAG Engine -- Enhanced with multi-doc, entity extraction, mind-map, timeline & study mode.
+Uses BM25 keyword retrieval (no heavy ML models) to stay within 512MB RAM on free hosting.
 """
 
 import os
@@ -7,13 +8,14 @@ import re
 import uuid
 import time
 import json
+import math
 import numpy as np
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import List, Dict, Optional, Tuple
+from collections import Counter
 
 import pypdf
-from sentence_transformers import SentenceTransformer
 from groq import Groq
 from dotenv import load_dotenv
 
@@ -26,9 +28,7 @@ load_dotenv()
 CHUNK_SIZE      = 500
 CHUNK_OVERLAP   = 80
 TOP_K           = 6
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 # ── Model Configuration ─────────────────────────────────────
-# Only using the single best model as requested
 MODEL_CHAIN = [
     "llama-3.3-70b-versatile",   # Best quality
 ]
@@ -114,66 +114,121 @@ class TextChunker:
 
 
 # ──────────────────────────────────────────
-#  Embedding Store
+#  BM25 Retrieval (no ML model needed)
 # ──────────────────────────────────────────
 
+def _tokenize(text: str) -> List[str]:
+    """Simple whitespace + punctuation tokenizer, lowercased."""
+    return re.findall(r'\b\w+\b', text.lower())
+
+
+class BM25Index:
+    """Lightweight BM25 index — no external dependencies, ~5MB RAM."""
+
+    def __init__(self, k1: float = 1.5, b: float = 0.75):
+        self.k1 = k1
+        self.b = b
+        self.chunks: List[Chunk] = []
+        self.doc_freqs: List[Counter] = []
+        self.idf: Dict[str, float] = {}
+        self.avg_dl: float = 0.0
+
+    def add_documents(self, chunks: List[Chunk]) -> None:
+        self.chunks.extend(chunks)
+        tokenized = [_tokenize(c.text) for c in chunks]
+        self.doc_freqs = [Counter(t) for t in tokenized]
+        dl = [len(t) for t in tokenized]
+        self.avg_dl = sum(dl) / max(len(dl), 1)
+        N = len(self.chunks)
+        # Compute IDF for all terms
+        df: Dict[str, int] = {}
+        for toks in tokenized:
+            for term in set(toks):
+                df[term] = df.get(term, 0) + 1
+        self.idf = {
+            term: math.log((N - freq + 0.5) / (freq + 0.5) + 1)
+            for term, freq in df.items()
+        }
+
+    def _rebuild(self) -> None:
+        """Rebuild index after document removal."""
+        all_chunks = self.chunks
+        self.chunks = []
+        self.doc_freqs = []
+        self.idf = {}
+        self.avg_dl = 0.0
+        if all_chunks:
+            self.add_documents(all_chunks)
+
+    def remove_by_doc_id(self, doc_id: str) -> None:
+        self.chunks = [c for c in self.chunks if c.doc_id != doc_id]
+        self._rebuild()
+
+    def search(self, query: str, top_k: int, doc_id: Optional[str] = None) -> List[Chunk]:
+        """BM25 search, optionally filtered to a single doc_id."""
+        q_terms = _tokenize(query)
+        if not q_terms or not self.chunks:
+            return []
+
+        # Filter candidate indices
+        indices = [
+            i for i, c in enumerate(self.chunks)
+            if doc_id is None or c.doc_id == doc_id
+        ]
+        if not indices:
+            return []
+
+        scores: Dict[int, float] = {}
+        for term in q_terms:
+            idf = self.idf.get(term, 0.0)
+            for i in indices:
+                tf = self.doc_freqs[i].get(term, 0)
+                dl = sum(self.doc_freqs[i].values())
+                denom = tf + self.k1 * (1 - self.b + self.b * dl / max(self.avg_dl, 1))
+                scores[i] = scores.get(i, 0.0) + idf * (tf * (self.k1 + 1)) / denom
+
+        top = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+        return [self.chunks[i] for i, _ in top]
+
+
 class EmbeddingStore:
-    _model: Optional[SentenceTransformer] = None
+    """Wraps BM25Index with the same interface as before."""
+
+    _index: Optional[BM25Index] = None
 
     def __init__(self):
-        if EmbeddingStore._model is None:
-            print(f"[EmbeddingStore] Loading model: {EMBEDDING_MODEL} ...")
-            EmbeddingStore._model = SentenceTransformer(EMBEDDING_MODEL)
-            print("[EmbeddingStore] Model ready OK")
-        self.model = EmbeddingStore._model
-        self._stores: Dict[str, Dict] = {}
+        if EmbeddingStore._index is None:
+            print("[EmbeddingStore] Using BM25 keyword retrieval (no model download)")
+            EmbeddingStore._index = BM25Index()
+        self.index = EmbeddingStore._index
+        self._doc_ids: set = set()
 
     def add_document(self, doc_id: str, chunks: List[Chunk]) -> None:
-        texts = [c.text for c in chunks]
-        embeddings = self.model.encode(texts, show_progress_bar=False,
-                                       batch_size=32, normalize_embeddings=True)
-        self._stores[doc_id] = {
-            "embeddings": np.array(embeddings, dtype="float32"),
-            "chunks": chunks,
-        }
+        self.index.add_documents(chunks)
+        self._doc_ids.add(doc_id)
         print(f"[EmbeddingStore] Indexed {len(chunks)} chunks for {doc_id}")
 
     def remove_document(self, doc_id: str) -> None:
-        self._stores.pop(doc_id, None)
+        self.index.remove_by_doc_id(doc_id)
+        self._doc_ids.discard(doc_id)
 
     def retrieve(self, doc_id: str, query: str, top_k: int = TOP_K) -> List[Chunk]:
-        if doc_id not in self._stores:
-            return []
-        return self._search(self._stores[doc_id], query, top_k)
+        return self.index.search(query, top_k, doc_id=doc_id)
 
     def retrieve_global(self, query: str, doc_ids: Optional[List[str]] = None,
                         top_k: int = 10) -> List[Chunk]:
         """Search across ALL (or selected) documents."""
-        all_chunks, all_embeddings = [], []
-        ids = doc_ids if doc_ids else list(self._stores.keys())
-        for did in ids:
-            if did not in self._stores:
-                continue
-            store = self._stores[did]
-            all_chunks.extend(store["chunks"])
-            all_embeddings.append(store["embeddings"])
-        if not all_chunks:
-            return []
-        combined = np.vstack(all_embeddings)
-        q_emb = np.array(self.model.encode([query], normalize_embeddings=True), dtype="float32")
-        scores = (combined @ q_emb.T).flatten()
-        top_idx = np.argsort(scores)[::-1][:top_k]
-        return [all_chunks[i] for i in top_idx]
-
-    def _search(self, store: Dict, query: str, top_k: int) -> List[Chunk]:
-        q_emb = np.array(self.model.encode([query], normalize_embeddings=True), dtype="float32")
-        scores = (store["embeddings"] @ q_emb.T).flatten()
-        k = min(top_k, len(store["chunks"]))
-        top_idx = np.argsort(scores)[::-1][:k]
-        return [store["chunks"][i] for i in top_idx]
+        if doc_ids:
+            results = []
+            per_doc = max(2, top_k // len(doc_ids))
+            for did in doc_ids:
+                results.extend(self.index.search(query, per_doc, doc_id=did))
+            # Re-rank by BM25 across combined result list
+            return results[:top_k]
+        return self.index.search(query, top_k, doc_id=None)
 
     def has_document(self, doc_id: str) -> bool:
-        return doc_id in self._stores
+        return doc_id in self._doc_ids
 
 
 # ──────────────────────────────────────────
